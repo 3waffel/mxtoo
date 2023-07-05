@@ -14,11 +14,12 @@ use axum::{
     routing::get,
     Router, Server,
 };
+use serde::Serialize;
 use sysinfo::{CpuExt, System, SystemExt};
 use tokio::sync::broadcast;
 use tower_http::services::ServeDir;
 
-type Snapshot = Vec<f32>;
+type Snapshot = WsData;
 
 #[tokio::main]
 async fn main() {
@@ -36,7 +37,7 @@ async fn main() {
     };
     let router = Router::new()
         .nest_service("/", ServeDir::new(public_dir))
-        .route("/realtime/cpus", get(realtime_cpus_get))
+        .route("/realtime/data", get(realtime_data_get))
         .with_state(app_state.clone());
 
     // Update CPU usage in the background
@@ -45,8 +46,23 @@ async fn main() {
         loop {
             if tx.receiver_count() > 0 {
                 sys.refresh_cpu();
-                let cpu_data: Vec<_> = sys.cpus().iter().map(|cpu| cpu.cpu_usage()).collect();
-                let _ = tx.send(cpu_data);
+                sys.refresh_memory();
+
+                let cpu_data: Vec<_> = sys
+                    .cpus()
+                    .iter()
+                    .enumerate()
+                    .map(|cpu| (cpu.0 as u32, cpu.1.cpu_usage()))
+                    .collect();
+                let mem_data: MemoryData = MemoryData::new(
+                    sys.total_memory(),
+                    sys.free_memory(),
+                    sys.available_memory(),
+                    sys.used_memory(),
+                );
+                let data = WsData::new(cpu_data, mem_data);
+
+                let _ = tx.send(data);
                 std::thread::sleep(System::MINIMUM_CPU_UPDATE_INTERVAL);
             } else {
                 std::thread::sleep(Duration::from_secs(1));
@@ -73,14 +89,14 @@ struct AppState {
 }
 
 #[axum::debug_handler]
-async fn realtime_cpus_get(
+async fn realtime_data_get(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(|ws: WebSocket| async { realtime_cpus_stream(state, ws).await })
+    ws.on_upgrade(|ws: WebSocket| async { realtime_data_stream(state, ws).await })
 }
 
-async fn realtime_cpus_stream(app_state: AppState, mut ws: WebSocket) {
+async fn realtime_data_stream(app_state: AppState, mut ws: WebSocket) {
     let mut rx = app_state.broadcast_tx.subscribe();
 
     while let Ok(msg) = rx.recv().await {
@@ -91,5 +107,36 @@ async fn realtime_cpus_stream(app_state: AppState, mut ws: WebSocket) {
             Ok(_) => {}
             Err(_) => break,
         }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct MemoryData {
+    total: u64,
+    free: u64,
+    available: u64,
+    used: u64,
+}
+
+impl MemoryData {
+    pub fn new(total: u64, free: u64, available: u64, used: u64) -> Self {
+        Self {
+            total,
+            free,
+            available,
+            used,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct WsData {
+    cpu_data: Vec<(u32, f32)>,
+    mem_data: MemoryData,
+}
+
+impl WsData {
+    pub fn new(cpu_data: Vec<(u32, f32)>, mem_data: MemoryData) -> Self {
+        Self { cpu_data, mem_data }
     }
 }

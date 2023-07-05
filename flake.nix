@@ -64,40 +64,50 @@
         };
         packages.default = packages.mxtoo;
 
-        nixosModules.mxtoo = let
-          cfg = self.config.services.mxtoo;
-        in
-          with pkgs.lib; {
-            options.services.mxtoo = {
-              enable = mkEnableOption "mxtoo service";
-              package = mkOption {
-                type = types.package;
-                default = packages.mxtoo;
-              };
-              port = mkOption {
-                type = types.port;
-                default = 7032;
-              };
-            };
-
-            config = mkIf cfg.enable {
-              systemd.services.mxtoo = {
-                after = ["network-online.target"];
-                wantedBy = ["multi-user.target"];
-                DynamicUser = true;
-                Restart = "always";
-                environment.MXTOO_PORT = toString cfg.port;
-                serviceConfig = {
-                  ExecStart = "${cfg.package}/bin/mxtoo";
-                };
-              };
-            };
-          };
-        nixosModules.default = nixosModules.mxtoo;
-
         devShells.default = pkgs.mkShell {
           nativeBuildInputs = [pkgs.toolchain];
         };
       }
-    );
+    )
+    // rec {
+      nixosModules.mxtoo = {
+        config,
+        lib,
+        pkgs,
+        ...
+      }: let
+        cfg = config.services.mxtoo;
+        mxtoo = self.packages.${pkgs.system}.mxtoo;
+      in
+        with lib; {
+          options.services.mxtoo = {
+            enable = mkEnableOption "mxtoo service";
+            package = mkOption {
+              type = types.package;
+              default = mxtoo;
+            };
+            port = mkOption {
+              type = types.port;
+              default = 7032;
+            };
+          };
+
+          config = mkIf cfg.enable {
+            systemd.services.mxtoo = {
+              after = ["network-online.target"];
+              wantedBy = ["multi-user.target"];
+              environment = {
+                MXTOO_PORT = toString cfg.port;
+                MXTOO_PUBLIC_DIR = "${cfg.package}/public";
+              };
+              serviceConfig = {
+                DynamicUser = true;
+                Restart = "always";
+                ExecStart = "${cfg.package}/bin/mxtoo";
+              };
+            };
+          };
+        };
+      nixosModules.default = nixosModules.mxtoo;
+    };
 }

@@ -30,8 +30,12 @@ async fn main() {
         broadcast_tx: tx.clone(),
     };
 
+    let public_dir = match env::var("MXTOO_PUBLIC_DIR") {
+        Ok(s) => s,
+        Err(_) => "public".into(),
+    };
     let router = Router::new()
-        .nest_service("/", ServeDir::new("public"))
+        .nest_service("/", ServeDir::new(public_dir))
         .route("/realtime/cpus", get(realtime_cpus_get))
         .with_state(app_state.clone());
 
